@@ -62,6 +62,8 @@ Input data is stored in `/data/raw` and sourced from:
 `Download_bands.py` allows downloading Sentinel-2 L2A bands **B02, B03, B04, B08** for a specific date using the openEO API.  
 The script applies **SCL masking** to remove clouds and requires specifying the desired extent in **EPSG:4326** (WGS84, lat/lon).
 
+If the four requested band TIFFs are already present in the output folder for the selected date, the downloader reuses them directly and skips the OpenEO request.
+
 > Note: This script is optional and not called from `main.py`.
 
 ---
@@ -72,6 +74,11 @@ The script applies **SCL masking** to remove clouds and requires specifying the 
 - **generate_cropland_mask()**: Generates a TIFF mask of croplands from raster and shapefile data, aligning with Sentinel-2 grid.  
 - **add_ids_to_croplands()**: Assigns a unique ID to each cropland for differentiation.  
 - **create_df_crops()**: Creates a dataframe containing median values of NDVI, EVI, MSAVI, and GNDVI for each cropland. These values are used for prediction.
+
+When the four derived index TIFFs for a given date already exist, `process_indices()` reuses the cached files and skips recomputation.
+When the cropland mask TIFF and filtered cropland shapefile are newer than the NDVI raster and source cropland shapefile, `generate_cropland_mask()` reuses them.
+When the cropland ID shapefile is newer than the filtered cropland shapefile, `add_ids_to_croplands()` reuses it.
+When the cropland statistics TSV is newer than the mask, ID shapefile, and derived indices, `create_df_crops()` reuses it.
 
 ---
 

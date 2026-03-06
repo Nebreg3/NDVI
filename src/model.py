@@ -1,6 +1,9 @@
 import pandas as pd
 import joblib
 import catboost as cb
+import warnings
+
+from sklearn.exceptions import InconsistentVersionWarning
 
 
 def predict_with_catboost(model_path, scaler_path, input_data_path, output_data_path):
@@ -17,7 +20,10 @@ def predict_with_catboost(model_path, scaler_path, input_data_path, output_data_
     # Load model and scaler
     model = cb.CatBoostClassifier()
     model.load_model(model_path)
-    scaler = joblib.load(scaler_path)
+    # Keep the legacy scaler load quiet until the artifact is retrained here.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", InconsistentVersionWarning)
+        scaler = joblib.load(scaler_path)
 
     # Load new data
     new_data = pd.read_csv(input_data_path, sep='\t')

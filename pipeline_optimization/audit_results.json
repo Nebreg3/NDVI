@@ -1,0 +1,29 @@
+{
+  "create_df_crops": {
+    "original_time_s": 0.1364,
+    "optimized_time_s": 0.0249,
+    "speedup": 5.5,
+    "same_shape": true,
+    "same_ids": true,
+    "max_numeric_diff": 0.0,
+    "values_match": true,
+    "rows": 40,
+    "col_diffs": {
+      "NDVI": 0.0,
+      "GNDVI": 0.0,
+      "MSAVI": 0.0,
+      "EVI": 0.0
+    }
+  },
+  "replace_pixels_within_shapefile": {
+    "original_time_s": 0.0112,
+    "optimized_time_s": 0.0095,
+    "speedup": 1.2,
+    "identical": true
+  },
+  "split_shapefile_by_planted": {
+    "original_time_s": 0.0158,
+    "optimized_time_s": 0.0158,
+    "speedup": 1.0
+  }
+}

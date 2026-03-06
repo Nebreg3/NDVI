@@ -1,0 +1,60 @@
+{
+  "generate_cropland_mask": {
+    "original_time_s": 0.6657,
+    "optimized_time_s": 0.0688,
+    "speedup": 9.7,
+    "identical": false,
+    "diff_pixels": 313,
+    "total_pixels": 40000,
+    "agreement_pct": 99.2175,
+    "original_mask_sum": 2368,
+    "optimized_mask_sum": 2681
+  },
+  "create_df_crops": {
+    "original_time_s": 0.0767,
+    "optimized_time_s": 0.0242,
+    "speedup": 3.2,
+    "same_shape": true,
+    "same_ids": true,
+    "max_numeric_diff": 0.0,
+    "values_match": true,
+    "rows_original": 12,
+    "rows_optimized": 12,
+    "col_diffs": {
+      "NDVI": 0.0,
+      "EVI": 0.0,
+      "GNDVI": 0.0,
+      "MSAVI": 0.0
+    }
+  },
+  "cache_aware_stages": {
+    "process_indices_cache": {
+      "cold_time_s": 0.0093,
+      "warm_time_s": 0.0001,
+      "speedup": 99.7,
+      "same_outputs": true
+    },
+    "generate_cropland_mask_cache": {
+      "cold_time_s": 0.0139,
+      "warm_time_s": 0.0002,
+      "speedup": 81.3,
+      "same_output": true,
+      "mtime_unchanged": true
+    },
+    "add_ids_to_croplands_cache": {
+      "cold_time_s": 0.0082,
+      "warm_time_s": 0.0001,
+      "speedup": 69.7,
+      "same_output": true,
+      "mtime_unchanged": true
+    },
+    "create_df_crops_cache": {
+      "cold_time_s": 0.0191,
+      "warm_time_s": 0.0009,
+      "speedup": 21.4,
+      "same_shape": true,
+      "same_values": true,
+      "mtime_unchanged": true
+    }
+  }
+}

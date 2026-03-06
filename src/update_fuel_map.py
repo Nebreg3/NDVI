@@ -2,11 +2,11 @@ import pandas as pd
 import os
 import numpy as np
 import rasterio
-from rasterio.features import geometry_mask
-from shapely.geometry import shape, box
-from shapely.affinity import scale
+from rasterio.features import rasterize
 import geopandas as gpd
-import fiona
+
+# FBFM40 non-burnable fuel types that should never be overwritten
+_PROTECTED_FUEL_CODES = frozenset({91, 98, 99})  # NB1 Urban, NB8 Water, NB9 Bare
 
 # ---------------------------------------------------------------------
 # Split shapefile into planted vs not planted
@@ -30,8 +30,11 @@ def split_shapefile_by_planted(base_path, region, date):
     out_planted = os.path.join(base_path, f"croplands_{region}_{date}_1.shp")
     out_not_planted = os.path.join(base_path, f"croplands_{region}_{date}_0.shp")
 
-    gdf_planted.to_file(out_planted)
-    gdf_not_planted.to_file(out_not_planted)
+    # Only write non-empty shapefiles
+    if not gdf_planted.empty:
+        gdf_planted.to_file(out_planted)
+    if not gdf_not_planted.empty:
+        gdf_not_planted.to_file(out_not_planted)
 
     print(f"✅ Saved: {out_planted} and {out_not_planted}")
 
@@ -43,26 +46,30 @@ def replace_pixels_within_shapefile(tif_path, shp_path, output_path, new_value):
     """
     Replaces all pixels in a raster (TIFF) that fall inside a shapefile with a specified value.
     """
-    # Load shapefile
     shapefile = gpd.read_file(shp_path)
 
-    # Open the raster
     with rasterio.open(tif_path) as src:
-        raster_data = src.read(1)
+        raster_data = src.read()
         out_meta = src.meta.copy()
+        target_band_index = 4 if src.count >= 4 else 1
 
-        # Convert geometries to a list of mappings
-        shapes = [feature["geometry"] for feature in shapefile.__geo_interface__["features"]]
+        # Use rasterize directly instead of __geo_interface__ serialization
+        geoms = [geom for geom in shapefile.geometry if geom is not None and not geom.is_empty]
+        if geoms:
+            mask_inside = rasterize(
+                [(geom, 1) for geom in geoms],
+                out_shape=(src.height, src.width),
+                transform=src.transform,
+                fill=0,
+                dtype=np.uint8,
+            ).astype(bool)
+            # Preserve non-burnable fuel types (urban, water, bare ground)
+            fuel_band = raster_data[target_band_index - 1]
+            protected = np.isin(fuel_band, list(_PROTECTED_FUEL_CODES))
+            mask_inside &= ~protected
+            fuel_band[mask_inside] = new_value
 
-        # Create a mask: True = inside the shapes, False = outside
-        mask_inside = geometry_mask(shapes, transform=src.transform, invert=True,
-                                    out_shape=(src.height, src.width))
-
-        # Replace pixels **inside** the shapefile
-        raster_data[mask_inside] = new_value
-
-        # Save the modified raster
         with rasterio.open(output_path, "w", **out_meta) as dest:
-            dest.write(raster_data, 1)
+            dest.write(raster_data)
 
 
