@@ -1,93 +1,39 @@
-import re
-import glob
-from rasterio.features import geometry_mask, rasterize
-from shapely.geometry import box
 import os
-import rasterio
+import re
+from pathlib import Path
+from typing import Dict
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import rasterio
+from rasterio.features import geometry_mask
+from rasterio.mask import mask
+from shapely.geometry import box
 
 
 REQUIRED_BANDS = ("B02", "B03", "B04", "B08")
-DERIVED_INDICES = ("NDVI", "GNDVI", "MSAVI", "EVI")
-SHAPEFILE_REQUIRED_EXTENSIONS = (".shp", ".shx", ".dbf")
-
-# Background polygon detection thresholds
-_MAX_INTERIOR_HOLES = 5
-_MAX_FIELD_AREA_HA = 50.0
+DERIVED_INDICES = ("NDVI", "EVI", "GNDVI", "MSAVI")
 
 
-def _is_valid_cache_file(path: str) -> bool:
-    return os.path.exists(path) and os.path.getsize(path) > 0
-
-
-def _safe_ratio(numerator: np.ndarray, denominator: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    result = np.full(numerator.shape, np.nan, dtype=np.float32)
-    valid = np.abs(denominator) > eps
-    np.divide(numerator, denominator, out=result, where=valid)
-    return result
-
-
-def _build_index_output_paths(output_dir: str, date_str: str, region: str) -> dict[str, str]:
+def _build_index_output_paths(output_dir: str, date_str: str, region: str) -> Dict[str, str]:
     return {
         index_name: os.path.join(output_dir, f"{index_name}_{date_str}_{region}.tiff")
         for index_name in DERIVED_INDICES
     }
 
 
-def _shapefile_component_paths(path: str, require_all: bool = False) -> list[str]:
-    root, ext = os.path.splitext(path)
-    if ext:
-        if require_all:
-            return [root + suffix for suffix in SHAPEFILE_REQUIRED_EXTENSIONS]
-        return sorted(glob.glob(root + ".*"))
-    return sorted(glob.glob(path + ".*"))
+def _resolve_cropland_source(input_dir: str, region: str) -> Path:
+    base = Path(input_dir)
+    shp_path = base / f"croplands_{region}.shp"
+    if shp_path.exists():
+        return shp_path
 
+    dbf_path = base / f"croplands_{region}.dbf"
+    if dbf_path.exists():
+        return dbf_path
 
-def _cache_is_current(output_paths: list[str], dependency_paths: list[str]) -> bool:
-    if not output_paths or not dependency_paths:
-        return False
-
-    if not all(_is_valid_cache_file(path) for path in output_paths):
-        return False
-
-    if not all(os.path.exists(path) for path in dependency_paths):
-        return False
-
-    newest_dependency = max(os.path.getmtime(path) for path in dependency_paths)
-    oldest_output = min(os.path.getmtime(path) for path in output_paths)
-    return oldest_output >= newest_dependency
-
-
-def _count_interiors(geom) -> int:
-    """Count interior rings (holes) in a polygon or multipolygon."""
-    if geom is None or geom.is_empty:
-        return 0
-    if geom.geom_type == 'Polygon':
-        return len(list(geom.interiors))
-    if geom.geom_type == 'MultiPolygon':
-        return sum(len(list(p.interiors)) for p in geom.geoms)
-    return 0
-
-
-def _is_real_crop_field(geometry_series) -> np.ndarray:
-    """Return boolean mask identifying real crop field polygons.
-
-    Removes background/inverted polygons that are artifacts from
-    cadastral data (e.g. SIGPAC): large polygons with many interior
-    holes representing the complement of crop fields.
-    """
-    keep = np.ones(len(geometry_series), dtype=bool)
-    for i, geom in enumerate(geometry_series):
-        if geom is None or geom.is_empty:
-            keep[i] = False
-            continue
-        n_holes = _count_interiors(geom)
-        area_ha = geom.area / 10000.0
-        if n_holes > _MAX_INTERIOR_HOLES or area_ha > _MAX_FIELD_AREA_HA:
-            keep[i] = False
-    return keep
+    raise FileNotFoundError(f"Cropland shapefile not found for region {region}")
 
 
 # ---------------------------------------------------------------------
@@ -104,8 +50,13 @@ def process_indices(base_dir, date_str, output_dir, region):
     - region (str): region name
     """
 
-    # Compile regex pattern for filenames matching the given date
-    pattern = re.compile(r"(B0[2348])_" + re.escape(date_str) + "_" + region + r"\.tiff")
+    expected_paths = _build_index_output_paths(output_dir, date_str, region)
+    if all(os.path.exists(path) for path in expected_paths.values()):
+        return expected_paths
+
+    pattern = re.compile(
+        r"(B0[2348])_" + re.escape(date_str) + "_" + re.escape(region) + r"\.tiff"
+    )
 
     # Dictionary to store band file paths
     bands = {}
@@ -120,7 +71,7 @@ def process_indices(base_dir, date_str, output_dir, region):
     # Check if all required bands are present
     if not all(b in bands for b in REQUIRED_BANDS):
         print(f"❌ Missing bands for date {date_str}")
-        return
+        return {}
 
     # Create output directory if it does not exist
     os.makedirs(output_dir, exist_ok=True)
@@ -132,10 +83,10 @@ def process_indices(base_dir, date_str, output_dir, region):
 
     try:
         # Open each band file
-        with rasterio.open(bands['B02']) as src_b2, \
-             rasterio.open(bands['B03']) as src_b3, \
-             rasterio.open(bands['B04']) as src_b4, \
-             rasterio.open(bands['B08']) as src_b8:
+           with rasterio.open(bands['B02']) as src_b2, \
+               rasterio.open(bands['B03']) as src_b3, \
+               rasterio.open(bands['B04']) as src_b4, \
+               rasterio.open(bands['B08']) as src_b8:
 
             # Read band data as float32
             b2 = src_b2.read(1).astype("float32")
@@ -143,19 +94,31 @@ def process_indices(base_dir, date_str, output_dir, region):
             b4 = src_b4.read(1).astype("float32")
             b8 = src_b8.read(1).astype("float32")
 
-            # Compute vegetation indices
-            with np.errstate(invalid="ignore", divide="ignore"):
-                ndvi = _safe_ratio(b8 - b4, b8 + b4)
-                gndvi = _safe_ratio(b8 - b3, b8 + b3)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ndvi_den = b8 + b4
+                gndvi_den = b8 + b3
+                evi_den = b8 + 6 * b4 - 7.5 * b2 + 1
+                msavi_radical = np.maximum((2 * b8 + 1) ** 2 - 8 * (b8 - b4), 0.0)
 
-                msavi_radical = np.clip((2.0 * b8 + 1.0) ** 2 - 8.0 * (b8 - b4), a_min=0.0, a_max=None)
-                msavi = ((2.0 * b8 + 1.0) - np.sqrt(msavi_radical)) / 2.0
-                evi = _safe_ratio(2.5 * (b8 - b4), b8 + 6.0 * b4 - 7.5 * b2 + 1.0)
-
-            ndvi = np.where(np.isfinite(ndvi), ndvi, np.nan).astype(np.float32)
-            gndvi = np.where(np.isfinite(gndvi), gndvi, np.nan).astype(np.float32)
-            msavi = np.where(np.isfinite(msavi), msavi, np.nan).astype(np.float32)
-            evi = np.where(np.isfinite(evi), evi, np.nan).astype(np.float32)
+                ndvi = np.divide(
+                    b8 - b4,
+                    ndvi_den,
+                    out=np.full_like(b8, np.nan, dtype=np.float32),
+                    where=ndvi_den != 0,
+                )
+                gndvi = np.divide(
+                    b8 - b3,
+                    gndvi_den,
+                    out=np.full_like(b8, np.nan, dtype=np.float32),
+                    where=gndvi_den != 0,
+                )
+                msavi = (2 * b8 + 1 - np.sqrt(msavi_radical)) / 2
+                evi = np.divide(
+                    2.5 * (b8 - b4),
+                    evi_den,
+                    out=np.full_like(b8, np.nan, dtype=np.float32),
+                    where=evi_den != 0,
+                )
 
             # Update raster profile to save results
             profile = src_b4.profile
@@ -164,15 +127,16 @@ def process_indices(base_dir, date_str, output_dir, region):
             # Save indices as GeoTIFFs
             indices = {'NDVI': ndvi, 'GNDVI': gndvi, 'MSAVI': msavi, 'EVI': evi}
             for index_name, index_data in indices.items():
-                output_path = output_paths[index_name]
+                output_path = expected_paths[index_name]
                 with rasterio.open(output_path, 'w', **profile) as dst:
                     dst.write(index_data.astype(rasterio.float32), 1)
 
             print(f"✅ Indices computed and saved for date {date_str}")
-            return output_paths
+            return expected_paths
 
     except rasterio.errors.RasterioIOError as e:
         print(f"⚠️ Error opening a file for date {date_str}: {e}")
+        return {}
 
 # ---------------------------------------------------------------------
 # Create pixels cropland mask
@@ -191,8 +155,8 @@ def generate_cropland_mask(region: str, input_dir: str, output_dir: str, date: s
 
     # Input and output paths
     ndvi_filename = f"NDVI_{date}_{region}.tiff"
-    ndvi_path = os.path.join(output_dir,ndvi_filename)
-    shp_path = os.path.join(input_dir, "croplands_"+ region + ".dbf")
+    ndvi_path = os.path.join(output_dir, ndvi_filename)
+    shp_path = _resolve_cropland_source(input_dir, region)
 
     # Output files
     shp_path_region = os.path.join(output_dir, f"croplands_{region}.shp")
@@ -200,10 +164,7 @@ def generate_cropland_mask(region: str, input_dir: str, output_dir: str, date: s
 
     os.makedirs(os.path.dirname(shp_path_region), exist_ok=True)
 
-    mask_outputs = [mask_path, *_shapefile_component_paths(shp_path_region, require_all=True)]
-    mask_dependencies = [ndvi_path, *_shapefile_component_paths(shp_path)]
-    if _cache_is_current(mask_outputs, mask_dependencies):
-        print(f"Using cached cropland mask for {region} on {date}")
+    if os.path.exists(mask_path) and os.path.exists(shp_path_region):
         return mask_path
 
     # ------------------------------------------------------------------------------------------
@@ -212,49 +173,24 @@ def generate_cropland_mask(region: str, input_dir: str, output_dir: str, date: s
     with rasterio.open(ndvi_path) as src:
         raster_bounds = src.bounds
         raster_polygon = gpd.GeoSeries([box(*raster_bounds)], crs=src.crs)
-
-    filtered_polygons = shp_data[shp_data.geometry.within(raster_polygon.iloc[0])]
-
-    # Remove background/inverted polygons (large polygons with many holes
-    # that represent the complement of crop fields, not actual fields)
-    n_before = len(filtered_polygons)
-    keep_mask = _is_real_crop_field(filtered_polygons.geometry)
-    filtered_polygons = filtered_polygons[keep_mask]
-    n_removed = n_before - len(filtered_polygons)
-    if n_removed > 0:
-        print(f"Removed {n_removed} background polygons ({n_before} → {len(filtered_polygons)})")
-
-    filtered_polygons.to_file(shp_path_region)
-
-    # ------------------------------------------------------------------------------------------
-    # Read raster metadata to build the mask
-    with rasterio.open(ndvi_path) as src:
         transform = src.transform
         crs = src.crs
         ndvi_shape = src.shape
-    # Convert per-pixel containment checks into a single rasterization pass
-    # by shrinking polygons according to the tolerance margin.
-    pixel_dx = abs(transform.a)
-    pixel_dy = abs(transform.e)
-    buffer_dist = max((pixel_dx / 2.0) * (tolerance - 1.0), (pixel_dy / 2.0) * (tolerance - 1.0))
 
-    shrunk_geoms = []
-    for geom in filtered_polygons.geometry:
-        if geom is None or geom.is_empty:
-            continue
-        shrunk = geom.buffer(-buffer_dist)
-        if not shrunk.is_empty:
-            shrunk_geoms.append(shrunk)
+    if shp_data.crs is not None and crs is not None and shp_data.crs != crs:
+        shp_data = shp_data.to_crs(crs)
 
-    if shrunk_geoms:
-        mask = rasterize(
-            [(geom, 1) for geom in shrunk_geoms],
-            out_shape=ndvi_shape,
+    filtered_polygons = shp_data[shp_data.geometry.intersects(raster_polygon.iloc[0])]
+    filtered_polygons.to_file(shp_path_region)
+
+    geometries = [geom for geom in filtered_polygons.geometry if geom is not None and not geom.is_empty]
+    if geometries:
+        mask = geometry_mask(
+            geometries,
             transform=transform,
-            fill=0,
-            dtype=np.uint8,
-            all_touched=False,
-        )
+            invert=True,
+            out_shape=ndvi_shape,
+        ).astype(np.uint8)
     else:
         mask = np.zeros(ndvi_shape, dtype=np.uint8)
 
@@ -300,15 +236,15 @@ def add_ids_to_croplands(input_dir: str, region: str):
     input_path = os.path.join(input_dir, f"croplands_{region}.shp")
     output_path = os.path.join(input_dir, f"croplands_{region}_id.shp")
 
-    # Check cache BEFORE reading the shapefile to avoid wasted I/O
-    output_components = _shapefile_component_paths(output_path, require_all=True)
-    input_components = _shapefile_component_paths(input_path)
-    if _cache_is_current(output_components, input_components):
-        print(f"Using cached cropland IDs for {region}")
+    output_path = os.path.join(input_dir, f"croplands_{region}_id.shp")
+
+    if os.path.exists(output_path):
         return output_path
 
     gdf = gpd.read_file(input_path)
     gdf['id'] = range(1, len(gdf) + 1)
+
+    # Save the new shapefile with IDs
     gdf.to_file(output_path)
 
     return output_path
@@ -338,20 +274,9 @@ def create_df_crops(region: str, input_dir: str, date: str):
     shp_path = os.path.join(input_dir, f"croplands_{region}_id.shp")
     output_txt = os.path.join(input_dir, f"output_croplands_{region}_{date}_stats.txt")
 
-    index_paths = _build_index_output_paths(input_dir, date, region)
-    stats_dependencies = [
-        mask_path,
-        *_shapefile_component_paths(shp_path),
-        *index_paths.values(),
-    ]
-    if _cache_is_current([output_txt], stats_dependencies):
-        try:
-            print(f"Using cached cropland statistics for {region} on {date}")
-            return pd.read_csv(output_txt, sep='\t')
-        except pd.errors.EmptyDataError:
-            pass
+    if os.path.exists(output_txt):
+        return pd.read_csv(output_txt, sep='\t')
 
-    # Read mask
     with rasterio.open(mask_path) as src_mask:
         mask_data = src_mask.read(1)
         transform = src_mask.transform
@@ -384,6 +309,8 @@ def create_df_crops(region: str, input_dir: str, date: str):
 
     # Filter index files for the given date
     index_files = [f for f in os.listdir(input_dir) if f.endswith(".tiff") and f"_{date}_" in f]
+
+    required_indexes = list(DERIVED_INDICES)
     date_files = {f.split('_')[0]: os.path.join(input_dir, f) for f in index_files}
 
     if not all(idx in date_files for idx in required_indexes):
@@ -427,6 +354,6 @@ def create_df_crops(region: str, input_dir: str, date: str):
     df_results = pd.DataFrame(results, columns=['date', 'id', 'Crop', *required_indexes])
     df_results.to_csv(output_txt, sep='\t', index=False)
 
-    return df_results
+    return pd.read_csv(output_txt, sep='\t')
 
 

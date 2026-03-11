@@ -47,27 +47,19 @@ def replace_pixels_within_shapefile(tif_path, shp_path, output_path, new_value):
     Replaces all pixels in a raster (TIFF) that fall inside a shapefile with a specified value.
     """
     shapefile = gpd.read_file(shp_path)
-
     with rasterio.open(tif_path) as src:
         raster_data = src.read()
         out_meta = src.meta.copy()
-        target_band_index = 4 if src.count >= 4 else 1
+        shapes = [feature["geometry"] for feature in shapefile.__geo_interface__["features"]]
+        mask_inside = geometry_mask(
+            shapes,
+            transform=src.transform,
+            invert=True,
+            out_shape=(src.height, src.width),
+        )
 
-        # Use rasterize directly instead of __geo_interface__ serialization
-        geoms = [geom for geom in shapefile.geometry if geom is not None and not geom.is_empty]
-        if geoms:
-            mask_inside = rasterize(
-                [(geom, 1) for geom in geoms],
-                out_shape=(src.height, src.width),
-                transform=src.transform,
-                fill=0,
-                dtype=np.uint8,
-            ).astype(bool)
-            # Preserve non-burnable fuel types (urban, water, bare ground)
-            fuel_band = raster_data[target_band_index - 1]
-            protected = np.isin(fuel_band, list(_PROTECTED_FUEL_CODES))
-            mask_inside &= ~protected
-            fuel_band[mask_inside] = new_value
+        band_index = 3 if src.count >= 4 else 0
+        raster_data[band_index][mask_inside] = new_value
 
         with rasterio.open(output_path, "w", **out_meta) as dest:
             dest.write(raster_data)
