@@ -109,6 +109,3 @@ def download_sentinel2_bands_for_date(
 
     return expected_paths
 
-                raise
-                
-    raise RuntimeError(f"Could not find Sentinel-2 data within {max_days_back} days prior to {date.strftime('%Y-%m-%d')}")

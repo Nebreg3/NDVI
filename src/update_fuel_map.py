@@ -2,7 +2,7 @@ import pandas as pd
 import os
 import numpy as np
 import rasterio
-from rasterio.features import rasterize
+from rasterio.features import rasterize, geometry_mask
 import geopandas as gpd
 
 # FBFM40 non-burnable fuel types that should never be overwritten

@@ -7,7 +7,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
-from rasterio.features import geometry_mask
+from rasterio.features import geometry_mask, rasterize
 from rasterio.mask import mask
 from shapely.geometry import box
 
@@ -34,6 +34,10 @@ def _resolve_cropland_source(input_dir: str, region: str) -> Path:
         return dbf_path
 
     raise FileNotFoundError(f"Cropland shapefile not found for region {region}")
+
+
+def _is_valid_cache_file(path: str) -> bool:
+    return os.path.exists(path) and os.path.getsize(path) > 0
 
 
 # ---------------------------------------------------------------------
